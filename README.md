@@ -1,6 +1,6 @@
 # Programmatic CI Failure Helper
 
-GitHub Action that inspects the current workflow run, finds the first failed job/step, tails its logs, and asks OpenRouter for likely fixes. Output goes to the action log (no PR comments).
+GitHub Action that inspects the current workflow run, finds the first failed job/step, tails its logs, and asks OpenRouter for likely fixes. Output goes to the action log and, if the run is tied to a pull request, a PR comment is created/updated.
 
 ## Inputs
 - `openrouter_api_key` (required): OpenRouter API key.
@@ -23,6 +23,7 @@ jobs:
     permissions:
       actions: read
       contents: read
+      pull-requests: write
     steps:
       - name: Step 1 - always succeeds
         run: echo "Hello from the first step"
@@ -50,4 +51,5 @@ jobs:
 ## Notes
 - Use `if: always()` on the helper step so it runs even when previous steps fail.
 - The job will still fail because of the broken step; the helper only analyzes and logs suggestions.
+- If the run is associated with a PR, the helper posts/updates a PR comment tagged with `<!-- ai-ci-helper -->`.
 - The action tails the first failed job/step; secrets are not logged and logs are trimmed to `max_log_lines`.

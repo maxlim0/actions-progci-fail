@@ -132,6 +132,61 @@ function resolveRunContext() {
   return { owner, repo, runId, runName };
 }
 
+// Attempts to resolve pull request number from event payload or ref.
+function resolvePullRequestNumber(payload) {
+  if (payload?.pull_request?.number) {
+    return payload.pull_request.number;
+  }
+  if (payload?.workflow_run?.pull_requests?.[0]?.number) {
+    return payload.workflow_run.pull_requests[0].number;
+  }
+  const ref = process.env.GITHUB_REF || process.env.GITHUB_REF_NAME || '';
+  const match = ref.match(/refs\/pull\/(\d+)\//);
+  if (match) {
+    return Number.parseInt(match[1], 10);
+  }
+  return null;
+}
+
+// Finds existing bot comment with marker in a PR.
+async function findExistingComment(owner, repo, issueNumber, token) {
+  let page = 1;
+  while (true) {
+    const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`;
+    const comments = await githubRequest(url, token);
+    if (!Array.isArray(comments) || comments.length === 0) {
+      break;
+    }
+    const match = comments.find((comment) => typeof comment.body === 'string' && comment.body.includes(MARKER));
+    if (match) {
+      return match;
+    }
+    if (comments.length < 100) {
+      break;
+    }
+    page += 1;
+  }
+  return null;
+}
+
+// Creates or updates a PR comment with the analysis.
+async function createOrUpdateComment(owner, repo, issueNumber, token, body, existingId) {
+  if (existingId) {
+    const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/issues/comments/${existingId}`;
+    return githubRequest(url, token, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body }),
+    });
+  }
+  const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/issues/${issueNumber}/comments`;
+  return githubRequest(url, token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body }),
+  });
+}
+
 // Sends the prompt to OpenRouter and returns the model response.
 async function callOpenRouter(apiKey, model, prompt) {
   const headers = {
@@ -172,7 +227,7 @@ async function callOpenRouter(apiKey, model, prompt) {
   return String(content).trim();
 }
 
-// Main entrypoint: gather failed job log, build prompt, call OpenRouter, and print analysis.
+// Main entrypoint: gather failed job log, build prompt, call OpenRouter, print and comment analysis.
 async function main() {
   const openrouterApiKey = getInput('openrouter_api_key', { required: true });
   const model = getInput('model', { required: true });
@@ -191,8 +246,7 @@ async function main() {
 
   ensurePromptTemplate(promptTemplate);
 
-  // Parse payload for logging/compatibility; logic uses current run context.
-  readEventPayload();
+  const payload = readEventPayload();
   const context = resolveRunContext();
 
   console.log(`Starting CI failure analysis for workflow: ${context.runName} (#${context.runId})`);
@@ -242,6 +296,28 @@ async function main() {
 
   console.log('AI analysis:');
   console.log(body);
+
+  const prNumber = resolvePullRequestNumber(payload);
+  if (!prNumber) {
+    console.log('No pull request context detected; skipping PR comment.');
+    return;
+  }
+
+  try {
+    const existing = await findExistingComment(context.owner, context.repo, prNumber, githubToken);
+    const result = await createOrUpdateComment(
+      context.owner,
+      context.repo,
+      prNumber,
+      githubToken,
+      body,
+      existing?.id,
+    );
+    const commentId = result?.id || existing?.id;
+    console.log(`PR comment ${existing ? 'updated' : 'created'} with ID: ${commentId}`);
+  } catch (error) {
+    console.error('Failed to create/update PR comment:', error.message);
+  }
 }
 
 main().catch((error) => {
