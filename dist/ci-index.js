@@ -75,32 +75,28 @@ async function fetchJobs(owner, repo, runId, token) {
   return jobs;
 }
 
-// Picks the first failed job from the run.
-function pickFailedJob(jobs) {
-  return jobs.find((job) => FAILURE_CONCLUSIONS.has(String(job.conclusion || '').toLowerCase()));
+// Fetches workflow run metadata (status/conclusion).
+async function fetchRun(owner, repo, runId, token) {
+  const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/actions/runs/${runId}`;
+  return githubRequest(url, token);
 }
 
-// Picks a job that has a failed step even if the job is still in_progress.
-function pickJobWithFailedStep(jobs) {
-  const currentJobName = process.env.GITHUB_JOB;
-  return jobs.find((job) => {
+// Picks the latest failed job (by completed_at/start time) from the run.
+function pickFailedJob(jobs) {
+  const failedJobs = (jobs || []).filter((job) => {
+    const conclusion = String(job.conclusion || '').toLowerCase();
     const hasFailedStep = Array.isArray(job.steps)
       && job.steps.some((step) => FAILURE_CONCLUSIONS.has(String(step.conclusion || '').toLowerCase()));
-    if (!hasFailedStep) return false;
-    if (!currentJobName) return true;
-    return (job.name === currentJobName) || (job.id === currentJobName);
-  }) || jobs.find((job) => Array.isArray(job.steps)
-    && job.steps.some((step) => FAILURE_CONCLUSIONS.has(String(step.conclusion || '').toLowerCase())));
-}
+    return FAILURE_CONCLUSIONS.has(conclusion) || hasFailedStep;
+  });
 
-// Picks a fallback job when no explicit failure detected (e.g., API lag).
-function pickFallbackJob(jobs) {
-  const currentJobName = process.env.GITHUB_JOB;
-  if (currentJobName) {
-    const byName = jobs.find((job) => job.name === currentJobName || job.id === currentJobName);
-    if (byName) return byName;
-  }
-  return jobs[0] || null;
+  failedJobs.sort((a, b) => {
+    const aTime = Date.parse(a.completed_at || a.started_at || 0);
+    const bTime = Date.parse(b.completed_at || b.started_at || 0);
+    return bTime - aTime;
+  });
+
+  return failedJobs[0] || null;
 }
 
 // Picks the first failed step inside the job.
@@ -108,7 +104,8 @@ function pickFailedStep(job) {
   if (!job || !Array.isArray(job.steps)) {
     return null;
   }
-  return job.steps.find((step) => FAILURE_CONCLUSIONS.has(String(step.conclusion || '').toLowerCase()));
+  const failedSteps = job.steps.filter((step) => FAILURE_CONCLUSIONS.has(String(step.conclusion || '').toLowerCase()));
+  return failedSteps[failedSteps.length - 1] || failedSteps[0] || null;
 }
 
 // Downloads logs for a specific job.
@@ -270,30 +267,29 @@ async function main() {
   const payload = readEventPayload();
   const context = resolveRunContext();
 
+  const runInfo = await fetchRun(context.owner, context.repo, context.runId, githubToken);
+  const runConclusion = String(runInfo?.conclusion || '').toLowerCase();
+  if (runConclusion && !FAILURE_CONCLUSIONS.has(runConclusion)) {
+    console.log(`Workflow conclusion is "${runConclusion}". Nothing to analyze.`);
+    return;
+  }
+
   console.log(`Starting CI failure analysis for workflow: ${context.runName} (#${context.runId})`);
 
   const jobs = await fetchJobs(context.owner, context.repo, context.runId, githubToken);
   if (!jobs.length) {
-    console.log('No jobs found for this workflow run.');
-    return;
+    throw new Error('No jobs found for this workflow run.');
   }
 
-  const failedJob = pickFailedJob(jobs) || pickJobWithFailedStep(jobs) || pickFallbackJob(jobs);
+  const failedJob = pickFailedJob(jobs);
   if (!failedJob) {
-    console.log('No failed jobs detected (including in-progress jobs). Exiting.');
-    return;
+    throw new Error('Failed to locate a failed job; aborting.');
   }
 
   const failedStep = pickFailedStep(failedJob);
   const stepName = failedStep ? failedStep.name : 'Unknown step';
 
-  let logsText = '';
-  try {
-    logsText = await fetchJobLogs(context.owner, context.repo, failedJob.id, githubToken);
-  } catch (error) {
-    console.error('Failed to download job logs:', error.message);
-    logsText = `Logs unavailable: ${error.message}`;
-  }
+  const logsText = await fetchJobLogs(context.owner, context.repo, failedJob.id, githubToken);
 
   const { text: trimmedLog, total: totalLogLines } = trimLog(logsText, maxLogLines);
 
