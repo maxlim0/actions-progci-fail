@@ -114,9 +114,7 @@ function pickFailedStep(job) {
 // Downloads logs for a specific job.
 async function fetchJobLogs(owner, repo, jobId, token) {
   const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/actions/jobs/${jobId}/logs`;
-  return githubRequest(url, token, {
-    headers: { Accept: 'text/plain' },
-  });
+  return githubRequest(url, token);
 }
 
 // Tails the log to a maximum number of lines.
