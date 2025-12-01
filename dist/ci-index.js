@@ -80,6 +80,19 @@ function pickFailedJob(jobs) {
   return jobs.find((job) => FAILURE_CONCLUSIONS.has(String(job.conclusion || '').toLowerCase()));
 }
 
+// Picks a job that has a failed step even if the job is still in_progress.
+function pickJobWithFailedStep(jobs) {
+  const currentJobName = process.env.GITHUB_JOB;
+  return jobs.find((job) => {
+    const hasFailedStep = Array.isArray(job.steps)
+      && job.steps.some((step) => FAILURE_CONCLUSIONS.has(String(step.conclusion || '').toLowerCase()));
+    if (!hasFailedStep) return false;
+    if (!currentJobName) return true;
+    return (job.name === currentJobName) || (job.id === currentJobName);
+  }) || jobs.find((job) => Array.isArray(job.steps)
+    && job.steps.some((step) => FAILURE_CONCLUSIONS.has(String(step.conclusion || '').toLowerCase())));
+}
+
 // Picks the first failed step inside the job.
 function pickFailedStep(job) {
   if (!job || !Array.isArray(job.steps)) {
@@ -257,9 +270,9 @@ async function main() {
     return;
   }
 
-  const failedJob = pickFailedJob(jobs);
+  const failedJob = pickFailedJob(jobs) || pickJobWithFailedStep(jobs);
   if (!failedJob) {
-    console.log('No failed jobs detected. Exiting.');
+    console.log('No failed jobs detected (including in-progress jobs). Exiting.');
     return;
   }
 
