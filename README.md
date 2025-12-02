@@ -37,7 +37,7 @@ jobs:
       pull-requests: write
     steps:
       - name: AI failure helper
-        uses: maxlim0/actions-progci-fail@v0.1
+        uses: maxlim0/actions-progci-fail@v0.13
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -48,7 +48,8 @@ jobs:
             Last log lines:
             {{LOG}}
 
-            Explain the likely root cause and suggest concrete fixes.
+            Explain the likely root cause and suggest concrete fixes. 
+            Explanation no longer than 200 words.
           max_log_lines: 200
 ```
 
