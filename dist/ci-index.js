@@ -278,6 +278,8 @@ async function main() {
   const payload = readEventPayload();
   const context = resolveRunContext();
 
+  await new Promise((resolve) => setTimeout(resolve, 5000));
+
   const runInfo = await fetchRun(context.owner, context.repo, context.runId, githubToken);
   const runConclusion = String(runInfo?.conclusion || '').toLowerCase();
   if (runConclusion && !FAILURE_CONCLUSIONS.has(runConclusion)) {
